@@ -397,7 +397,7 @@ static void set_disp_buf(const char *disp_message) {
     disp_buffer_length = 0;
 
     while (*disp_message != '\0') {
-        uint8_t c = *(disp_message++) - 0x20U;
+        uint8_t c =((uint8_t)*(disp_message++)) - 0x20U;
         if (c > DISP_DATA_COUNT) {
             continue;
         }
