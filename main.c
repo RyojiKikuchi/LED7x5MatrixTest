@@ -44,9 +44,6 @@
 
 #define I2C_TIME_OUT_TMR0 10U   // 4.1*25 ≒ 41ms
 
-#define i2c_wait(cond) \
-    TMR0L = 0; \
-    while (cond) { if (TMR0L >= I2C_TIME_OUT_TMR0) { i2c_error = true; return; } }
 
 #define UART_BUFFER_SIZE 64U     // シリアル通信の受信バッファサイズ
 
@@ -254,11 +251,10 @@ static void i2c_recovery(void) {
     }
 }
 
-/*@
+/*
  * UARTに出力する
  */
 static void uart_write(const char *buf) {
-    uint8_t idx = 0;
     while (*buf != '\0') {
         while (!EUSART1_IsTxReady());
         EUSART1_Write(*(buf++));
@@ -395,14 +391,13 @@ static void set_disp_raw_buf(void) {
  * UARTで受信した文字をDisplayに設定する
  */
 static void set_disp_buf(const char *disp_message) {
-    uint8_t char_pos = 0;
     uint8_t data_bits[ROW_COUNT];
     bool full_write = false;
 
     disp_buffer_length = 0;
 
-    while (disp_message[char_pos] != '\0') {
-        uint8_t c = disp_message[char_pos++] - 0x20U;
+    while (*disp_message != '\0') {
+        uint8_t c = *(disp_message++) - 0x20U;
         if (c > DISP_DATA_COUNT) {
             continue;
         }
@@ -457,10 +452,17 @@ static void rotate_disp_buf(void) {
 }
 
 /*
+ * I2Cタイムアウト判定
+ * i2c_putsでのみ使用
+ */
+#define i2c_wait(cond) \
+    TMR0L = 0; \
+    while (cond) { if (TMR0L >= I2C_TIME_OUT_TMR0) { i2c_error = true; return; } }
+
+/*
  * ディスプレイへ表示データを出力する
  */
 static void i2c_puts(uint16_t slave_address, uint8_t *send_data, uint8_t length) {
-
     I2C1_Write(slave_address, send_data, length);
     i2c_wait(!I2C1_IsBusy());
     i2c_wait(I2C1_IsBusy());
