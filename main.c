@@ -44,6 +44,10 @@
 
 #define I2C_TIME_OUT_TMR0 10U   // 4.1*25 ≒ 41ms
 
+#define i2c_wait(cond) \
+    TMR0L = 0; \
+    while (cond) { if (TMR0L >= I2C_TIME_OUT_TMR0) { i2c_error = true; return; } }
+
 #define UART_BUFFER_SIZE 64U     // シリアル通信の受信バッファサイズ
 
 #define DISP_SLAVE_ADDRESS 0x70U      // I2C スレーブアドレス
@@ -51,7 +55,7 @@
 #define ROW_COUNT 5U
 
 #define ROW_BUFFER_LENGTH 10U    // バッファ数、バッファ数x8bitがディスプレイバッファのビット数
-#define ROW_BUFFER_BITS (uint8_t) (ROW_BUFFER_LENGTH * 8)
+#define ROW_BUFFER_BITS ((uint8_t) (ROW_BUFFER_LENGTH * 8))
 
 static char uart_buf[UART_BUFFER_SIZE]; // シリアル通信受信バッファ
 
@@ -220,13 +224,13 @@ static void i2c_recovery(void) {
     }
 
     // 3. ストップ条件を擬似的に生成（SDAをLow→Highへ）
-    //RA5 = 0;
+    // SDA Low
     SDA_PORT = 0;
     __delay_us(5);
-    //RA4 = 1;
+    // SCL High
     SCL_PORT = 1;
     __delay_us(5);
-    //RA5 = 1;
+    // SDA High
     SDA_PORT = 1;
     __delay_us(5);
 
@@ -253,13 +257,12 @@ static void i2c_recovery(void) {
 /*@
  * UARTに出力する
  */
-static void uart_write(char *buf) {
+static void uart_write(const char *buf) {
     uint8_t idx = 0;
-    do {
+    while (*buf != '\0') {
         while (!EUSART1_IsTxReady());
-        EUSART1_Write(buf[idx]);
-    } while (buf[++idx] != '\0');
-
+        EUSART1_Write(*(buf++));
+    }
 }
 
 /*
@@ -350,7 +353,7 @@ static bool set_disp_buffer(uint8_t bit_len, uint8_t *disp_bits) {
 /*
  * ディスプレイメモリ(disp_buffer)をI2C送信用データに変換する。
  */
-static void set_disp_raw_buf() {
+static void set_disp_raw_buf(void) {
     // バッファ初期化
     memset(disp_raw_buffer, 0x00U, sizeof (disp_raw_buffer));
 
@@ -391,10 +394,10 @@ static void set_disp_raw_buf() {
 /*
  * UARTで受信した文字をDisplayに設定する
  */
-static void set_disp_buf(char *disp_message) {
+static void set_disp_buf(const char *disp_message) {
     uint8_t char_pos = 0;
     uint8_t data_bits[ROW_COUNT];
-    bool full_write;
+    bool full_write = false;
 
     disp_buffer_length = 0;
 
@@ -409,7 +412,7 @@ static void set_disp_buf(char *disp_message) {
         full_write = set_disp_buffer(bit_length, data_bits);
         if (!full_write || disp_buffer_length >= ROW_BUFFER_BITS) {
             break;
-        } 
+        }
     }
 
     // 最後のスペースを削除する
@@ -418,7 +421,7 @@ static void set_disp_buf(char *disp_message) {
     }
 }
 
-static void rotate_disp_buf() {
+static void rotate_disp_buf(void) {
     // 溢れ分があるときのみスクロールする
     if (disp_buffer_length >= 22) {
         for (uint8_t row = 0; row < ROW_COUNT; row++) {
@@ -437,7 +440,7 @@ static void rotate_disp_buf() {
                     disp_buffer[row].bytes[buf_idx] |= (disp_buffer[row].bytes[buf_idx + 1] & 0x80U) != 0;
                 }
             }
-            
+
             // スクロールバッファ反映
             if ((disp_buffer[row].scroll_work & 0x80U) != 0) {
                 uint8_t bits = disp_buffer_length - 1;
@@ -459,33 +462,15 @@ static void rotate_disp_buf() {
 static void i2c_puts(uint16_t slave_address, uint8_t *send_data, uint8_t length) {
 
     I2C1_Write(slave_address, send_data, length);
-    TMR0L = 0;
-    while (!I2C1_IsBusy()) {
-        if (TMR0L >= I2C_TIME_OUT_TMR0) {
-            i2c_error = true;
-            return;
-        }
-    }
-    TMR0L = 0;
-    while (I2C1_IsBusy()) {
-        if (TMR0L >= I2C_TIME_OUT_TMR0) {
-            i2c_error = true;
-            return;
-        }
-    }
-    TMR0L = 0;
-    while (I2C1_ErrorGet() != I2C_ERROR_NONE) {
-        if (TMR0L >= I2C_TIME_OUT_TMR0) {
-            i2c_error = true;
-            return;
-        }
-    }
+    i2c_wait(!I2C1_IsBusy());
+    i2c_wait(I2C1_IsBusy());
+    i2c_wait(I2C1_ErrorGet() != I2C_ERROR_NONE);
 }
 
 /*
  * ディスプレイへ表示データを出力する
  */
-static void disp_put_dispdata() {
+static void disp_put_dispdata(void) {
     i2c_puts(DISP_SLAVE_ADDRESS, disp_raw_buffer, sizeof (disp_raw_buffer));
 }
 
@@ -499,7 +484,7 @@ static void disp_put(uint8_t write_data) {
 /*
  * HT16K33A初期化
  */
-static void disp_init() {
+static void disp_init(void) {
     // オシレータ起動
     disp_put(0x21);
     // Display OFF
