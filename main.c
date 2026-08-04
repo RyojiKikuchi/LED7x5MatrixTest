@@ -325,8 +325,8 @@ static void get_char_data(const uint8_t *disp_data1, disp_char_data_t *disp_char
     uint8_t d1 = disp_data1[1];
     uint8_t d2 = disp_data1[2];
 
-    disp_char_data->bit_length = d0 >> 5; // 上位4bitがビット長
-    disp_char_data->no_space = ((d0 & 0x10) != 0); // SPACE要否
+    disp_char_data->bit_length = d0 >> 5; // 上位3bitがビット長
+    disp_char_data->no_space = ((d0 & 0x10U) != 0U); // SPACE要否(1: SPACEを挿入しない)
     disp_char_data->disp_bits[0] = (uint8_t) (d0 << 4);
     disp_char_data->disp_bits[1] = d1 & 0xF0U;
     disp_char_data->disp_bits[2] = (uint8_t) (d1 << 4);
