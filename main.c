@@ -117,7 +117,7 @@ static const uint8_t matrix_conv[5][21] = {
 // 0x80の右シフト量からシフト後の値を取得
 //static const uint8_t bit_shift_value[] = {0x80U, 0x40U, 0x20U, 0x10U, 0x08U, 0x04U, 0x02U, 0x01U};
 
-#define DISP_DATA_COUNT 0x5FU
+#define DISP_DATA_COUNT 0x61U
 
 // キャラクタデータ
 static const uint8_t disp_data[][3] = {
