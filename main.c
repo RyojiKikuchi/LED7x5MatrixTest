@@ -42,19 +42,54 @@
 #include "mcc_generated_files/system/system.h"
 #include <string.h>
 
+#define HT16K33_STANDBY_MODE 0x20U
+#define HT16K33_NORMAL_OPERATION_MODE 0x21U
+
+#define HT16K33_DISPLAY_OFF 0x80U
+#define HT16K33_DISPLAY_ON_BLINK_OFF 0x81U
+#define HT16K33_DISPLAY_ON_BLINK_2HZ 0x83U
+#define HT16K33_DISPLAY_ON_BLINK_1HZ 0x85U
+#define HT16K33_DISPLAY_ON_BLINK_0_5HZ 0x87U
+
+#define HT16K33_ROWINT_ROW 0xA0U
+#define HT16K33_ROWINT_INT_ACTIVE_LOW 0xA1U
+#define HT16K33_ROWINT_INT_ACTIVE_HIGH 0xA3U
+
+#define HT16K33_DIMMING_01 0xE0U
+#define HT16K33_DIMMING_02 0xE1U
+#define HT16K33_DIMMING_03 0xE2U
+#define HT16K33_DIMMING_04 0xE3U
+#define HT16K33_DIMMING_05 0xE4U
+#define HT16K33_DIMMING_06 0xE5U
+#define HT16K33_DIMMING_07 0xE6U
+#define HT16K33_DIMMING_08 0xE7U
+#define HT16K33_DIMMING_09 0xE8U
+#define HT16K33_DIMMING_10 0xE9U
+#define HT16K33_DIMMING_11 0xEAU
+#define HT16K33_DIMMING_12 0xEBU
+#define HT16K33_DIMMING_13 0xECU
+#define HT16K33_DIMMING_14 0xEDU
+#define HT16K33_DIMMING_15 0xEEU
+#define HT16K33_DIMMING_16 0xEFU
+
 #define I2C_TIME_OUT_TMR0 10U   // 4.1*25 ≒ 41ms
 
-
-#define UART_BUFFER_SIZE 64U     // シリアル通信の受信バッファサイズ
+#define UART_BUFFER_SIZE 48U     // シリアル通信の受信バッファサイズ
 
 #define DISP_SLAVE_ADDRESS 0x70U      // I2C スレーブアドレス
 #define DISP_SCROLL_TMR0 60U    // スクロールスピード(4.1ms * DISP_SCROLL_TMP0)
 #define ROW_COUNT 5U
 
-#define ROW_BUFFER_LENGTH 10U    // バッファ数、バッファ数x8bitがディスプレイバッファのビット数
+#define ROW_BUFFER_LENGTH 20U    // バッファ数、バッファ数x8bitがディスプレイバッファのビット数
 #define ROW_BUFFER_BITS ((uint8_t) (ROW_BUFFER_LENGTH * 8))
 
 static char uart_buf[UART_BUFFER_SIZE]; // シリアル通信受信バッファ
+
+typedef struct {
+    uint8_t disp_bits[ROW_COUNT];
+    uint8_t bit_length;
+    bool no_space;
+} disp_char_data_t;
 
 typedef struct {
     uint8_t bytes[ROW_BUFFER_LENGTH]; // 配列アクセス用
@@ -64,7 +99,7 @@ typedef struct {
 static disp_row_t disp_buffer[ROW_COUNT]; // 表示用バッファ
 static uint8_t disp_buffer_length = 0; // 格納済みのbit数
 
-static uint8_t disp_raw_buffer[17]; // I2Cに出力する表示バッファ
+//static uint8_t disp_raw_buffer[17]; // I2Cに出力する表示バッファ
 static uint8_t disp_led = 0U; // LED点灯制御
 static bool i2c_error = true; // I2Cエラー有無
 
@@ -80,108 +115,110 @@ static const uint8_t matrix_conv[5][21] = {
 };
 
 // 0x80の右シフト量からシフト後の値を取得
-static const uint8_t bit_shift_value[] = {0x80U, 0x40U, 0x20U, 0x10U, 0x08U, 0x04U, 0x02U, 0x01U};
+//static const uint8_t bit_shift_value[] = {0x80U, 0x40U, 0x20U, 0x10U, 0x08U, 0x04U, 0x02U, 0x01U};
 
 #define DISP_DATA_COUNT 0x5FU
 
 // キャラクタデータ
 static const uint8_t disp_data[][3] = {
-    {0x10U, 0x00U, 0x00U}, // 20  
-    {0x18U, 0x88U, 0x08U}, // 21 !
-    {0x3AU, 0xA0U, 0x00U}, // 22 "
-    {0x46U, 0xF6U, 0xF6U}, // 23 #
-    {0x44U, 0x7FU, 0xE4U}, // 24 $
-    {0x40U, 0x92U, 0x49U}, // 25 %
-    {0x46U, 0x97U, 0xA7U}, // 26 &
-    {0x2CU, 0x80U, 0x00U}, // 27 '
-    {0x24U, 0x88U, 0x84U}, // 28 (
-    {0x28U, 0x44U, 0x48U}, // 29 )
-    {0x34U, 0xEEU, 0xE4U}, // 2A *
-    {0x30U, 0x4EU, 0x40U}, // 2B +
-    {0x20U, 0x00U, 0x4CU}, // 2C ,
-    {0x30U, 0x0EU, 0x00U}, // 2D -
-    {0x10U, 0x00U, 0x08U}, // 2E .
-    {0x30U, 0x24U, 0x80U}, // 2F /
-    {0x46U, 0x99U, 0x96U}, // 30 0
-    {0x42U, 0x62U, 0x2FU}, // 31 1
-    {0x4EU, 0x16U, 0x8FU}, // 32 2
-    {0x4EU, 0x16U, 0x1EU}, // 33 3
-    {0x49U, 0x97U, 0x11U}, // 34 4
-    {0x4FU, 0x8EU, 0x1EU}, // 35 5
-    {0x46U, 0x8EU, 0x96U}, // 36 6
-    {0x4FU, 0x12U, 0x22U}, // 37 7
-    {0x46U, 0x96U, 0x96U}, // 38 8
-    {0x46U, 0x97U, 0x16U}, // 39 9
-    {0x10U, 0x80U, 0x80U}, // 3A :
-    {0x20U, 0x40U, 0x48U}, // 3B ;
-    {0x32U, 0x48U, 0x42U}, // 3C <
-    {0x30U, 0xE0U, 0xE0U}, // 3D =
-    {0x38U, 0x42U, 0x48U}, // 3E >
-    {0x46U, 0x92U, 0x02U}, // 3F ?
-    {0x46U, 0x9BU, 0xB6U}, // 40 @
-    {0x46U, 0x9FU, 0x99U}, // 41 A
-    {0x4EU, 0x9EU, 0x9EU}, // 42 B
-    {0x47U, 0x88U, 0x87U}, // 43 C
-    {0x4EU, 0x99U, 0x9EU}, // 44 D
-    {0x4FU, 0x8EU, 0x8FU}, // 45 E
-    {0x4FU, 0x8EU, 0x88U}, // 46 F
-    {0x47U, 0x8BU, 0x97U}, // 47 G
-    {0x49U, 0x9FU, 0x99U}, // 48 H
-    {0x3EU, 0x44U, 0x4EU}, // 49 I
-    {0x47U, 0x11U, 0x96U}, // 4A J
-    {0x49U, 0xACU, 0xA9U}, // 4B K
-    {0x48U, 0x88U, 0x8FU}, // 4C L
-    {0x49U, 0xFFU, 0x99U}, // 4D M
-    {0x49U, 0xDBU, 0x99U}, // 4E N
-    {0x46U, 0x99U, 0x96U}, // 4F O
-    {0x4EU, 0x9EU, 0x88U}, // 50 P
-    {0x46U, 0x99U, 0xB7U}, // 51 Q
-    {0x4EU, 0x9EU, 0xA9U}, // 52 R
-    {0x47U, 0x86U, 0x1EU}, // 53 S
-    {0x3EU, 0x44U, 0x44U}, // 54 T
-    {0x49U, 0x99U, 0x96U}, // 55 U
-    {0x49U, 0x99U, 0x52U}, // 56 V
-    {0x49U, 0x9FU, 0xF9U}, // 57 W
-    {0x49U, 0x96U, 0x99U}, // 58 X
-    {0x3AU, 0xA4U, 0x44U}, // 59 Y
-    {0x4FU, 0x16U, 0x8FU}, // 5A Z
-    {0x2CU, 0x88U, 0x8CU}, // 5B [
-    {0x3AU, 0x4EU, 0xE4U}, // 5C ￥
-    {0x2CU, 0x44U, 0x4CU}, // 5D ]
-    {0x34U, 0xA0U, 0x00U}, // 5E ^
-    {0x40U, 0x00U, 0x0FU}, // 5F _
-    {0x28U, 0x40U, 0x00U}, // 60 `
-    {0x4EU, 0x17U, 0x97U}, // 61 a
-    {0x48U, 0x8EU, 0x9EU}, // 62 b
-    {0x40U, 0x78U, 0x87U}, // 63 c
-    {0x41U, 0x17U, 0x97U}, // 64 d
-    {0x46U, 0x9FU, 0x86U}, // 65 e
-    {0x43U, 0x4FU, 0x44U}, // 66 f
-    {0x46U, 0x97U, 0x16U}, // 67 g
-    {0x48U, 0x8EU, 0x99U}, // 68 h
-    {0x18U, 0x08U, 0x88U}, // 69 i
-    {0x24U, 0x04U, 0x48U}, // 6A j
-    {0x40U, 0x9AU, 0xE9U}, // 6B k
-    {0x28U, 0x88U, 0x8CU}, // 6C l
-    {0x40U, 0x5BU, 0xBBU}, // 6D m
-    {0x40U, 0xE9U, 0x99U}, // 6E n
-    {0x40U, 0x69U, 0x96U}, // 6F o
-    {0x46U, 0x9EU, 0x88U}, // 70 p
-    {0x46U, 0x97U, 0x11U}, // 71 q
-    {0x40U, 0xBCU, 0x88U}, // 72 r
-    {0x47U, 0x86U, 0x1EU}, // 73 s
-    {0x40U, 0x4FU, 0x43U}, // 74 t
-    {0x40U, 0x99U, 0xB7U}, // 75 u
-    {0x40U, 0x99U, 0x52U}, // 76 v
-    {0x40U, 0xBBU, 0xB6U}, // 77 w
-    {0x40U, 0x96U, 0x69U}, // 78 x
-    {0x49U, 0x97U, 0x1EU}, // 79 y
-    {0x40U, 0xF2U, 0x4FU}, // 7A z
-    {0x32U, 0x4CU, 0x42U}, // 7B {
-    {0x18U, 0x88U, 0x88U}, // 7C |
-    {0x38U, 0x46U, 0x48U}, // 7D }
-    {0x45U, 0xA0U, 0x00U}, // 7E ~
-    {0x4FU, 0xFFU, 0xFFU}, // 7F 
+    {0x20U, 0x00U, 0x00U}, // 20  
+    {0x28U, 0x88U, 0x08U}, // 21 !
+    {0x6AU, 0xA0U, 0x00U}, // 22 "
+    {0x86U, 0xF6U, 0xF6U}, // 23 #
+    {0x84U, 0x7FU, 0xE4U}, // 24 $
+    {0x80U, 0x92U, 0x49U}, // 25 %
+    {0x86U, 0x97U, 0xA7U}, // 26 &
+    {0x4CU, 0x80U, 0x00U}, // 27 '
+    {0x44U, 0x88U, 0x84U}, // 28 (
+    {0x48U, 0x44U, 0x48U}, // 29 )
+    {0x64U, 0xEEU, 0xE4U}, // 2A *
+    {0x60U, 0x4EU, 0x40U}, // 2B +
+    {0x40U, 0x00U, 0x4CU}, // 2C ,
+    {0x60U, 0x0EU, 0x00U}, // 2D -
+    {0x20U, 0x00U, 0x08U}, // 2E .
+    {0x60U, 0x24U, 0x80U}, // 2F /
+    {0x86U, 0x99U, 0x96U}, // 30 0
+    {0x82U, 0x62U, 0x2FU}, // 31 1
+    {0x8EU, 0x16U, 0x8FU}, // 32 2
+    {0x8EU, 0x16U, 0x1EU}, // 33 3
+    {0x89U, 0x97U, 0x11U}, // 34 4
+    {0x8FU, 0x8EU, 0x1EU}, // 35 5
+    {0x86U, 0x8EU, 0x96U}, // 36 6
+    {0x8FU, 0x12U, 0x22U}, // 37 7
+    {0x86U, 0x96U, 0x96U}, // 38 8
+    {0x86U, 0x97U, 0x16U}, // 39 9
+    {0x20U, 0x80U, 0x80U}, // 3A :
+    {0x40U, 0x40U, 0x48U}, // 3B ;
+    {0x62U, 0x48U, 0x42U}, // 3C <
+    {0x60U, 0xE0U, 0xE0U}, // 3D =
+    {0x68U, 0x42U, 0x48U}, // 3E >
+    {0x86U, 0x92U, 0x02U}, // 3F ?
+    {0x86U, 0x9BU, 0xB6U}, // 40 @
+    {0x86U, 0x9FU, 0x99U}, // 41 A
+    {0x8EU, 0x9EU, 0x9EU}, // 42 B
+    {0x87U, 0x88U, 0x87U}, // 43 C
+    {0x8EU, 0x99U, 0x9EU}, // 44 D
+    {0x8FU, 0x8EU, 0x8FU}, // 45 E
+    {0x8FU, 0x8EU, 0x88U}, // 46 F
+    {0x87U, 0x8BU, 0x97U}, // 47 G
+    {0x89U, 0x9FU, 0x99U}, // 48 H
+    {0x6EU, 0x44U, 0x4EU}, // 49 I
+    {0x87U, 0x11U, 0x96U}, // 4A J
+    {0x89U, 0xACU, 0xA9U}, // 4B K
+    {0x88U, 0x88U, 0x8FU}, // 4C L
+    {0x89U, 0xFFU, 0x99U}, // 4D M
+    {0x89U, 0xDBU, 0x99U}, // 4E N
+    {0x86U, 0x99U, 0x96U}, // 4F O
+    {0x8EU, 0x9EU, 0x88U}, // 50 P
+    {0x86U, 0x99U, 0xB7U}, // 51 Q
+    {0x8EU, 0x9EU, 0xA9U}, // 52 R
+    {0x87U, 0x86U, 0x1EU}, // 53 S
+    {0x6EU, 0x44U, 0x44U}, // 54 T
+    {0x89U, 0x99U, 0x96U}, // 55 U
+    {0x89U, 0x99U, 0x52U}, // 56 V
+    {0x89U, 0x9FU, 0xF9U}, // 57 W
+    {0x89U, 0x96U, 0x99U}, // 58 X
+    {0x6AU, 0xA4U, 0x44U}, // 59 Y
+    {0x8FU, 0x16U, 0x8FU}, // 5A Z
+    {0x4CU, 0x88U, 0x8CU}, // 5B [
+    {0x6AU, 0x4EU, 0xE4U}, // 5C ￥
+    {0x4CU, 0x44U, 0x4CU}, // 5D ]
+    {0x64U, 0xA0U, 0x00U}, // 5E ^
+    {0x80U, 0x00U, 0x0FU}, // 5F _
+    {0x48U, 0x40U, 0x00U}, // 60 `
+    {0x8EU, 0x17U, 0x97U}, // 61 a
+    {0x88U, 0x8EU, 0x9EU}, // 62 b
+    {0x80U, 0x78U, 0x87U}, // 63 c
+    {0x81U, 0x17U, 0x97U}, // 64 d
+    {0x86U, 0x9FU, 0x86U}, // 65 e
+    {0x83U, 0x4FU, 0x44U}, // 66 f
+    {0x86U, 0x97U, 0x16U}, // 67 g
+    {0x88U, 0x8EU, 0x99U}, // 68 h
+    {0x28U, 0x08U, 0x88U}, // 69 i
+    {0x44U, 0x04U, 0x48U}, // 6A j
+    {0x80U, 0x9AU, 0xE9U}, // 6B k
+    {0x48U, 0x88U, 0x8CU}, // 6C l
+    {0x80U, 0x5BU, 0xBBU}, // 6D m
+    {0x80U, 0xE9U, 0x99U}, // 6E n
+    {0x80U, 0x69U, 0x96U}, // 6F o
+    {0x86U, 0x9EU, 0x88U}, // 70 p
+    {0x86U, 0x97U, 0x11U}, // 71 q
+    {0x80U, 0xBCU, 0x88U}, // 72 r
+    {0x87U, 0x86U, 0x1EU}, // 73 s
+    {0x80U, 0x4FU, 0x43U}, // 74 t
+    {0x80U, 0x99U, 0xB7U}, // 75 u
+    {0x80U, 0x99U, 0x52U}, // 76 v
+    {0x80U, 0xBBU, 0xB6U}, // 77 w
+    {0x80U, 0x96U, 0x69U}, // 78 x
+    {0x89U, 0x97U, 0x1EU}, // 79 y
+    {0x80U, 0xF2U, 0x4FU}, // 7A z
+    {0x62U, 0x4CU, 0x42U}, // 7B {
+    {0x28U, 0x88U, 0x88U}, // 7C |
+    {0x68U, 0x46U, 0x48U}, // 7D }
+    {0x85U, 0xA0U, 0x00U}, // 7E ~
+    {0x8FU, 0xFFU, 0xFFU}, // 7F 
+    {0x40U, 0x83U, 0x43U}, // 80 ℃
+    {0x30U, 0x86U, 0x86U}, // 81 ℃
 };
 
 /*
@@ -252,6 +289,27 @@ static void i2c_recovery(void) {
 }
 
 /*
+ * I2Cタイムアウト判定
+ * i2c_putsでのみ使用
+ */
+#define i2c_wait(cond) \
+    TMR0L = 0; \
+    while (cond) { if (TMR0L >= I2C_TIME_OUT_TMR0) { i2c_error = true; return; } }
+
+/*
+ * ディスプレイへ表示データを出力する
+ */
+static void i2c_puts(uint16_t slave_address, uint8_t *send_data, uint8_t length) {
+    if (!I2C1_Write(slave_address, send_data, length)){
+        i2c_error = true;
+        return;
+    }
+    i2c_wait(!I2C1_IsBusy());
+    i2c_wait(I2C1_IsBusy());
+    i2c_wait(I2C1_ErrorGet() != I2C_ERROR_NONE);
+}
+
+/*
  * UARTに出力する
  */
 static void uart_write(const char *buf) {
@@ -264,32 +322,34 @@ static void uart_write(const char *buf) {
 /*
  * キャラクタ情報を取得する
  */
-static uint8_t get_disp_bits(const uint8_t *disp_data1, uint8_t *disp_bits) {
+static void get_char_data(const uint8_t *disp_data1, disp_char_data_t *disp_char_data) {
 
     uint8_t d0 = disp_data1[0];
     uint8_t d1 = disp_data1[1];
     uint8_t d2 = disp_data1[2];
 
-    uint8_t bit_len = d0 >> 4; // 上位4bitがビット長
-    disp_bits[0] = (uint8_t) (d0 << 4);
-    disp_bits[1] = d1 & 0xF0U;
-    disp_bits[2] = (uint8_t) (d1 << 4);
-    disp_bits[3] = d2 & 0xF0U;
-    disp_bits[4] = (uint8_t) (d2 << 4);
-
-    return bit_len;
+    disp_char_data->bit_length = d0 >> 5; // 上位3bitがビット長
+    disp_char_data->no_space = ((d0 & 0x10U) != 0U); // SPACE要否(1: SPACEを挿入しない)
+    disp_char_data->disp_bits[0] = (uint8_t) (d0 << 4);
+    disp_char_data->disp_bits[1] = d1 & 0xF0U;
+    disp_char_data->disp_bits[2] = (uint8_t) (d1 << 4);
+    disp_char_data->disp_bits[3] = d2 & 0xF0U;
+    disp_char_data->disp_bits[4] = (uint8_t) (d2 << 4);
 
 }
 
+#define SET_DISP_BUFFER_FULLWRITE_SPACE 0U
+#define SET_DISP_BUFFER_OVERFLOW 1U
+#define SET_DISP_BUFFER_FULLWRITE_NOSPACE 2U
+
 /*
  * キャラクタ情報をDisplayメモリに設定する
+ *  return
+ *   0: 全ビット設定 ＆ SPACE設定
+ *   1: 全ビット設定不可
+ *   2: 全ビット設定 ＆ SPACE未設定
  */
-static bool set_disp_buffer(uint8_t bit_len, uint8_t *disp_bits) {
-
-    // disp_buffer_length == 0 のときは全行初期化
-    if (disp_buffer_length == 0) {
-        memset(disp_buffer, 0x00U, sizeof (disp_buffer));
-    }
+static uint8_t set_disp_buffer(uint8_t char_index) {
 
     // 書込位置の特定（配列のインデックス、ビット位置）
     uint8_t bits = disp_buffer_length;
@@ -301,41 +361,53 @@ static bool set_disp_buffer(uint8_t bit_len, uint8_t *disp_bits) {
 
     // オーバーフロー
     if (idx >= ROW_BUFFER_LENGTH) {
-        return false;
+        return SET_DISP_BUFFER_OVERFLOW;
     }
 
-    // 溢れビット計算
-    bool full_write = true;
+    // キャラクタデータ取得
+    disp_char_data_t disp_char_data;
+    get_char_data(disp_data[char_index], &disp_char_data);
+
+    // disp_buffer_length == 0 のときは全行初期化
+    if (disp_buffer_length == 0) {
+        memset(disp_buffer, 0x00U, sizeof (disp_buffer));
+    }
+
+    // 設定先のインデックス、ビット位置、溢れビット計算
+    uint8_t bit_len = disp_char_data.bit_length;
+    uint8_t return_status = SET_DISP_BUFFER_FULLWRITE_SPACE;
     uint8_t r = 0;
     uint8_t next_pos = (bits + bit_len);
     if (next_pos > 8) {
         r = bit_len - (next_pos - 8);
         if ((idx + 1) >= ROW_BUFFER_LENGTH) {
             // 余り分を格納するスペース無し
-            full_write = false;
+            return_status = SET_DISP_BUFFER_OVERFLOW;
         }
     }
 
     // バッファに追加
     for (uint8_t row = 0; row < ROW_COUNT; row++) {
-        disp_buffer[row].bytes[idx] |= disp_bits[row] >> bits;
+        disp_buffer[row].bytes[idx] |= disp_char_data.disp_bits[row] >> bits;
         // 溢れビットが存在するなら次のデータ位置に設定
-        if (r && full_write) {
-            disp_buffer[row].bytes[idx + 1] = (uint8_t) (disp_bits[row] << r);
+        if (r && return_status == SET_DISP_BUFFER_FULLWRITE_SPACE) {
+            disp_buffer[row].bytes[idx + 1] = (uint8_t) (disp_char_data.disp_bits[row] << r);
         }
     }
 
     // 設定数加算
     disp_buffer_length += bit_len;
-    if (!full_write) {
-        // 溢れビットが書き込めなかったら溢れビット分減算
-        disp_buffer_length -= r;
-    } else if (disp_buffer_length < ROW_BUFFER_BITS) {
-        // スペース挿入(1bit))
-        disp_buffer_length++;
-    } else {
-        // スペースが挿入出来なかった
-        full_write = false;
+    if (return_status == SET_DISP_BUFFER_FULLWRITE_SPACE) {
+        // space挿入判定
+        if (disp_char_data.no_space) {
+            return_status = SET_DISP_BUFFER_FULLWRITE_NOSPACE;
+        } else if (disp_buffer_length < ROW_BUFFER_BITS) {
+            // スペース挿入(1bit))
+            disp_buffer_length++;
+        } else {
+            // スペースが挿入出来なかった
+            return_status = SET_DISP_BUFFER_OVERFLOW;
+        }
     }
 
     // 最大値超過していた場合最大値設定
@@ -343,13 +415,16 @@ static bool set_disp_buffer(uint8_t bit_len, uint8_t *disp_bits) {
         disp_buffer_length = ROW_BUFFER_BITS;
     }
 
-    return full_write;
+    return return_status;
 }
 
 /*
  * ディスプレイメモリ(disp_buffer)をI2C送信用データに変換する。
  */
-static void set_disp_raw_buf(void) {
+static void put_disp_buffer(void) {
+
+    uint8_t disp_raw_buffer[17];
+
     // バッファ初期化
     memset(disp_raw_buffer, 0x00U, sizeof (disp_raw_buffer));
 
@@ -365,7 +440,7 @@ static void set_disp_raw_buf(void) {
 
             uint8_t led_on = disp_buffer[row].bytes[buf_idx] & bitmask;
             if (led_on) {
-                disp_raw_buffer[idx] |= bit_shift_value[bit_pos];
+                disp_raw_buffer[idx] |= 0x80U >> bit_pos;
             }
             bitmask >>= 1;
             if (bitmask == 0U) {
@@ -385,33 +460,32 @@ static void set_disp_raw_buf(void) {
         disp_raw_buffer[12] |= 0x80U;
     }
 
+    i2c_puts(DISP_SLAVE_ADDRESS, disp_raw_buffer, sizeof (disp_raw_buffer));
 }
 
 /*
  * UARTで受信した文字をDisplayに設定する
  */
-static void set_disp_buf(const char *disp_message) {
+static void disp_write(const char *disp_message) {
     uint8_t data_bits[ROW_COUNT];
-    bool full_write = false;
+    uint8_t status;
 
     disp_buffer_length = 0;
 
     while (*disp_message != '\0') {
-        uint8_t c =((uint8_t)*(disp_message++)) - 0x20U;
-        if (c > DISP_DATA_COUNT) {
+        uint8_t char_index = ((uint8_t)*(disp_message++)) - 0x20U;
+        if (char_index > DISP_DATA_COUNT) {
             continue;
         }
-        // 
-        //uint8_t bit_length = get_disp_bits(c, data_bits);
-        uint8_t bit_length = get_disp_bits(disp_data[c], data_bits);
-        full_write = set_disp_buffer(bit_length, data_bits);
-        if (!full_write || disp_buffer_length >= ROW_BUFFER_BITS) {
+
+        status = set_disp_buffer(char_index);
+        if (status == SET_DISP_BUFFER_OVERFLOW || disp_buffer_length >= ROW_BUFFER_BITS) {
             break;
         }
     }
 
     // 最後のスペースを削除する
-    if (full_write) {
+    if (status == SET_DISP_BUFFER_FULLWRITE_SPACE) {
         disp_buffer_length--;
     }
 }
@@ -444,36 +518,11 @@ static void rotate_disp_buf(void) {
                     idx++;
                     bits -= 8;
                 }
-                disp_buffer[row].bytes[idx] |= bit_shift_value[bits];
+                disp_buffer[row].bytes[idx] |= 0x80U >> bits;
             }
             disp_buffer[row].scroll_work <<= 1;
         }
     }
-}
-
-/*
- * I2Cタイムアウト判定
- * i2c_putsでのみ使用
- */
-#define i2c_wait(cond) \
-    TMR0L = 0; \
-    while (cond) { if (TMR0L >= I2C_TIME_OUT_TMR0) { i2c_error = true; return; } }
-
-/*
- * ディスプレイへ表示データを出力する
- */
-static void i2c_puts(uint16_t slave_address, uint8_t *send_data, uint8_t length) {
-    I2C1_Write(slave_address, send_data, length);
-    i2c_wait(!I2C1_IsBusy());
-    i2c_wait(I2C1_IsBusy());
-    i2c_wait(I2C1_ErrorGet() != I2C_ERROR_NONE);
-}
-
-/*
- * ディスプレイへ表示データを出力する
- */
-static void disp_put_dispdata(void) {
-    i2c_puts(DISP_SLAVE_ADDRESS, disp_raw_buffer, sizeof (disp_raw_buffer));
 }
 
 /*
@@ -488,15 +537,15 @@ static void disp_put(uint8_t write_data) {
  */
 static void disp_init(void) {
     // オシレータ起動
-    disp_put(0x21);
+    disp_put(HT16K33_NORMAL_OPERATION_MODE);
     // Display OFF
-    disp_put(0x80);
+    disp_put(HT16K33_DISPLAY_OFF);
     // ROW/INTをROWに設定
-    disp_put(0xA0);
+    disp_put(HT16K33_ROWINT_ROW);
     // 明るさ設定
-    disp_put(0xEF);
+    disp_put(HT16K33_DIMMING_16);
     // Display ON
-    disp_put(0x81);
+    disp_put(HT16K33_DISPLAY_ON_BLINK_OFF);
 
     i2c_error = false;
 }
@@ -514,8 +563,7 @@ static void uart_read_line(void) {
             // 4.1 * 80 = 328ms 
             if (TMR0L > DISP_SCROLL_TMR0) {
                 rotate_disp_buf();
-                set_disp_raw_buf();
-                disp_put_dispdata();
+                put_disp_buffer();
                 TMR0L = 0;
             }
         }
@@ -568,9 +616,8 @@ int main(void) {
         uart_write(uart_buf);
         uart_write("\r\n");
 
-        set_disp_buf(uart_buf);
-        set_disp_raw_buf();
-        disp_put_dispdata();
+        disp_write(uart_buf);
+        put_disp_buffer();
 
     }
 }
