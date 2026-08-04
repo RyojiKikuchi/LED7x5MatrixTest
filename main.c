@@ -300,7 +300,10 @@ static void i2c_recovery(void) {
  * ディスプレイへ表示データを出力する
  */
 static void i2c_puts(uint16_t slave_address, uint8_t *send_data, uint8_t length) {
-    I2C1_Write(slave_address, send_data, length);
+    if (!I2C1_Write(slave_address, send_data, length)){
+        i2c_error = true;
+        return;
+    }
     i2c_wait(!I2C1_IsBusy());
     i2c_wait(I2C1_IsBusy());
     i2c_wait(I2C1_ErrorGet() != I2C_ERROR_NONE);
