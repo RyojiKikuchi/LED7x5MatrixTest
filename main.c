@@ -354,7 +354,7 @@ static uint8_t set_disp_buffer(uint8_t char_index) {
 
     // スクロール反映
     if (need_scroll) {
-        
+
         if (disp_char_data.bit_length <= (scroll_pos - skip_count)) {
             // 文字出力不要
             skip_count += disp_char_data.bit_length;
