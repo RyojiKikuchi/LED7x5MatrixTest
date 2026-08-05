@@ -59,6 +59,12 @@
 
 #define I2C_TIME_OUT_TMR0 15U   // 4.1 * I2C_TIME_OUT_TMR0 (30ms以上あれば安全)
 
+/*
+ * UARTバッファサイズの最大値について
+ * 内部のカウンタが8bitなので、最大値を超えないように考慮
+ * scroll_posが一番大きくなる。
+ * 256/5=51.2 余裕を見て48程度を最大値とする。
+ */
 #define UART_BUFFER_SIZE 48U     // シリアル通信の受信バッファサイズ
 
 #define DISP_SLAVE_ADDRESS 0x70U      // I2C スレーブアドレス
@@ -348,6 +354,7 @@ static uint8_t set_disp_buffer(uint8_t char_index) {
 
     // スクロール反映
     if (need_scroll) {
+
         if (disp_char_data.bit_length <= (scroll_pos - skip_count)) {
             // 文字出力不要
             skip_count += disp_char_data.bit_length;
@@ -514,6 +521,7 @@ static void put_disp_buffer(void) {
 
 static void disp_buffer_clear(void) {
     disp_buffer_length = 0;
+    skip_count = 0;
     memset(disp_buffer, 0x00U, sizeof (disp_buffer));
 }
 
@@ -521,7 +529,7 @@ static void disp_buffer_clear(void) {
  * UARTで受信した文字をDisplayに設定する
  */
 static void disp_write(const char *disp_message) {
-    uint8_t status;
+    uint8_t status = SET_DISP_BUFFER_FULLWRITE_NOSPACE;
 
     while (*disp_message != '\0') {
         uint8_t char_index = ((uint8_t)*(disp_message++)) - 0x20U;
@@ -548,69 +556,26 @@ static void disp_write(const char *disp_message) {
 
 }
 
-static bool rotate_disp_buf(void) {
+static void rotate_disp_buf(void) {
 
-    // スクロール要否判定
-    if (need_scroll) {
+    // 1ドットスクロールして出力
+    scroll_pos++;
+    disp_buffer_clear();
+    disp_write(disp_char_buf);
 
-        // 1ドットスクロールして出力
-        skip_count = 0;
-        scroll_pos++;
-        disp_buffer_clear();
-        disp_write(disp_char_buf);
+    // スペース出力
+    disp_write(DISP_SCROLL_SPACE_STRING);
 
-        // スペース出力
-        disp_write(DISP_SCROLL_SPACE_STRING);
-
-        // 出力がなくなったらスクロール位置を0に戻す
-        if (!disp_buffer_length) {
-            scroll_pos = 0;
-        }
-
-        // 続きの出力
-        if (disp_buffer_length <= COL_COUNT) {
-            disp_write(disp_char_buf);
-        }
+    // 出力がなくなったらスクロール位置を0に戻す
+    if (!disp_buffer_length) {
+        scroll_pos = 0;
     }
 
-    return need_scroll;
-    /*
-        // 溢れ分があるときのみスクロールする
-        if (disp_buffer_length >= 22) {
-            for (uint8_t row = 0; row < ROW_COUNT; row++) {
+    // 続きの出力
+    if (disp_buffer_length <= COL_COUNT) {
+        disp_write(disp_char_buf);
+    }
 
-                // MSBをworkに格納
-                if ((disp_buffer[row].bytes[0] & 0x80U) != 0) {
-                    // scroll_workへの設定場所でつなぎ目のスペースを調整する。
-                    // 0x80U: 0dot, 0x40U: 1dot, 0x20U: 2dot, 0x10U: 3dot... 最大7dot
-                    disp_buffer[row].scroll_work |= 0x10U;
-                }
-
-                for (uint8_t buf_idx = 0; buf_idx < ROW_BUFFER_LENGTH; buf_idx++) {
-                    // 全体的に1bitシフト
-                    disp_buffer[row].bytes[buf_idx] <<= 1;
-                    if (buf_idx < (ROW_BUFFER_LENGTH - 1)) {
-                        disp_buffer[row].bytes[buf_idx] |= (disp_buffer[row].bytes[buf_idx + 1] & 0x80U) != 0;
-                    }
-                }
-
-                // スクロールバッファ反映
-                if ((disp_buffer[row].scroll_work & 0x80U) != 0) {
-                    uint8_t bits = disp_buffer_length - 1;
-                    uint8_t idx = 0;
-                    while (bits >= 8) {
-                        idx++;
-                        bits -= 8;
-                    }
-                    disp_buffer[row].bytes[idx] |= 0x80U >> bits;
-                }
-                disp_buffer[row].scroll_work <<= 1;
-            }
-            return true;
-        }
-        return false;
-     */
-    return false;
 }
 
 /*
@@ -647,6 +612,7 @@ static void disp_init(void) {
  */
 static void uart_read_line(void) {
     uint8_t idx = 0;
+    bool rcv = false;  // 取りこぼし防止のため、受信後次のスクロールをキャンセルする
     char c;
     TMR0L = 0;
     while (1) {
@@ -654,11 +620,16 @@ static void uart_read_line(void) {
             // スクロール間隔判定
             if (TMR0L > DISP_SCROLL_TMR0) {
                 TMR0L = 0;
-                if (rotate_disp_buf()) {
+                if (!rcv && need_scroll) {
+                    LED_SetHigh();
+                    rotate_disp_buf();
                     put_disp_buffer();
+                    LED_SetLow();
                 }
+                rcv = false;
             }
         }
+        rcv = true;
         c = (char) EUSART1_Read();
         switch (c) {
             case '\r':
@@ -707,7 +678,7 @@ int main(void) {
         uart_read_line();
         LED_SetHigh();
 
-        for (uint8_t i = 0; i < (UART_BUFFER_SIZE - 1); i++) {
+        for (uint8_t i = 0; i < UART_BUFFER_SIZE; i++) {
             disp_char_buf[i] = uart_buf[i];
         }
 
