@@ -63,9 +63,11 @@
 
 #define DISP_SLAVE_ADDRESS 0x70U      // I2C スレーブアドレス
 #define DISP_SCROLL_TMR0 60U    // スクロールスピード(4.1ms * DISP_SCROLL_TMP0)
+#define DISP_SCROLL_SPACE_STRING "  "  // スクロール時の隙間この間隔+1のスペースが空く
 #define ROW_COUNT 5U
+#define COL_COUNT 21U
 
-#define ROW_BUFFER_LENGTH 20U    // バッファ数、バッファ数x8bitがディスプレイバッファのビット数
+#define ROW_BUFFER_LENGTH 3U    // バッファ数、バッファ数x8bitがディスプレイバッファのビット数
 #define ROW_BUFFER_BITS ((uint8_t) (ROW_BUFFER_LENGTH * 8))
 
 #define SET_DISP_BUFFER_FULLWRITE_SPACE 0U
@@ -73,6 +75,10 @@
 #define SET_DISP_BUFFER_FULLWRITE_NOSPACE 2U
 
 static char uart_buf[UART_BUFFER_SIZE]; // シリアル通信受信バッファ
+static char disp_char_buf[UART_BUFFER_SIZE]; // 内部バッファ
+static bool need_scroll = false;
+static uint8_t scroll_pos = 0; // スクロール位置
+static uint8_t skip_count = 0;
 
 typedef struct {
     uint8_t disp_bits[ROW_COUNT];
@@ -82,7 +88,6 @@ typedef struct {
 
 typedef struct {
     uint8_t bytes[ROW_BUFFER_LENGTH]; // 配列アクセス用
-    uint8_t scroll_work; // スクロール用バッファ
 } disp_row_t;
 
 static disp_row_t disp_buffer[ROW_COUNT]; // 表示用バッファ
@@ -97,7 +102,7 @@ static uint8_t disp_brightness = 0x0FU;
 
 // キャラクタデータ
 static const uint8_t disp_data[][3] = {
-    {0x20U, 0x00U, 0x00U}, // 20  
+    {0x30U, 0x00U, 0x00U}, // 20  
     {0x28U, 0x88U, 0x08U}, // 21 !
     {0x6AU, 0xA0U, 0x00U}, // 22 "
     {0x86U, 0xF6U, 0xF6U}, // 23 #
@@ -337,7 +342,36 @@ static void get_char_data(const uint8_t *disp_data1, disp_char_data_t *disp_char
  */
 static uint8_t set_disp_buffer(uint8_t char_index) {
 
-    // 書込位置の特定（配列のインデックス、ビット位置）
+    // キャラクタデータ取得
+    disp_char_data_t disp_char_data;
+    get_char_data(disp_data[char_index], &disp_char_data);
+
+    // スクロール反映
+    if (need_scroll) {
+        if (disp_char_data.bit_length <= (scroll_pos - skip_count)) {
+            // 文字出力不要
+            skip_count += disp_char_data.bit_length;
+            if (disp_char_data.no_space) {
+                return SET_DISP_BUFFER_FULLWRITE_NOSPACE;
+            } else {
+                // SPACE追加
+                if (scroll_pos > skip_count) {
+                    skip_count++;
+                } else {
+                    disp_buffer_length++;
+                }
+                return SET_DISP_BUFFER_FULLWRITE_SPACE;
+            }
+        } else if (skip_count < scroll_pos) {
+            uint8_t shift = scroll_pos - skip_count;
+            disp_char_data.bit_length -= shift;
+            for (uint8_t row = 0; row < ROW_COUNT; row++) {
+                disp_char_data.disp_bits[row] <<= shift;
+            }
+            skip_count += shift;
+        }
+    }
+
     uint8_t bits = disp_buffer_length;
     uint8_t idx = 0;
     while (bits >= 8) {
@@ -348,15 +382,6 @@ static uint8_t set_disp_buffer(uint8_t char_index) {
     // オーバーフロー
     if (idx >= ROW_BUFFER_LENGTH) {
         return SET_DISP_BUFFER_OVERFLOW;
-    }
-
-    // キャラクタデータ取得
-    disp_char_data_t disp_char_data;
-    get_char_data(disp_data[char_index], &disp_char_data);
-
-    // disp_buffer_length == 0 のときは全行初期化
-    if (disp_buffer_length == 0) {
-        memset(disp_buffer, 0x00U, sizeof (disp_buffer));
     }
 
     // 設定先のインデックス、ビット位置、溢れビット計算
@@ -423,7 +448,7 @@ static void put_disp_buffer(void) {
         // 列のループ
         uint8_t bitmask = 0x80U;
         uint8_t buf_idx = 0;
-        for (uint8_t col = 0U; col < 21U; col++) {
+        for (uint8_t col = 0U; col < COL_COUNT; col++) {
 
             /*
              * upper,lowerは以下変換表の上位4bitと下位4bit
@@ -487,14 +512,16 @@ static void put_disp_buffer(void) {
     i2c_puts(DISP_SLAVE_ADDRESS, disp_raw_buffer, sizeof (disp_raw_buffer));
 }
 
+static void disp_buffer_clear(void) {
+    disp_buffer_length = 0;
+    memset(disp_buffer, 0x00U, sizeof (disp_buffer));
+}
+
 /*
  * UARTで受信した文字をDisplayに設定する
  */
 static void disp_write(const char *disp_message) {
-    uint8_t data_bits[ROW_COUNT];
     uint8_t status;
-
-    disp_buffer_length = 0;
 
     while (*disp_message != '\0') {
         uint8_t char_index = ((uint8_t)*(disp_message++)) - 0x20U;
@@ -509,45 +536,80 @@ static void disp_write(const char *disp_message) {
     }
 
     // 最後のスペースを削除する
-    if (status == SET_DISP_BUFFER_FULLWRITE_SPACE) {
+    if (status == SET_DISP_BUFFER_FULLWRITE_SPACE && disp_buffer_length && !need_scroll) {
         disp_buffer_length--;
     }
+
+    if (scroll_pos == 0 && need_scroll == false) {
+        if (disp_buffer_length > COL_COUNT) {
+            need_scroll = true;
+        }
+    }
+
 }
 
 static bool rotate_disp_buf(void) {
-    // 溢れ分があるときのみスクロールする
-    if (disp_buffer_length >= 22) {
-        for (uint8_t row = 0; row < ROW_COUNT; row++) {
 
-            // MSBをworkに格納
-            if ((disp_buffer[row].bytes[0] & 0x80U) != 0) {
-                // scroll_workへの設定場所でつなぎ目のスペースを調整する。
-                // 0x80U: 0dot, 0x40U: 1dot, 0x20U: 2dot, 0x10U: 3dot... 最大7dot
-                disp_buffer[row].scroll_work |= 0x10U;
-            }
+    // スクロール要否判定
+    if (need_scroll) {
 
-            for (uint8_t buf_idx = 0; buf_idx < ROW_BUFFER_LENGTH; buf_idx++) {
-                // 全体的に1bitシフト
-                disp_buffer[row].bytes[buf_idx] <<= 1;
-                if (buf_idx < (ROW_BUFFER_LENGTH - 1)) {
-                    disp_buffer[row].bytes[buf_idx] |= (disp_buffer[row].bytes[buf_idx + 1] & 0x80U) != 0;
-                }
-            }
+        // 1ドットスクロールして出力
+        skip_count = 0;
+        scroll_pos++;
+        disp_buffer_clear();
+        disp_write(disp_char_buf);
 
-            // スクロールバッファ反映
-            if ((disp_buffer[row].scroll_work & 0x80U) != 0) {
-                uint8_t bits = disp_buffer_length - 1;
-                uint8_t idx = 0;
-                while (bits >= 8) {
-                    idx++;
-                    bits -= 8;
-                }
-                disp_buffer[row].bytes[idx] |= 0x80U >> bits;
-            }
-            disp_buffer[row].scroll_work <<= 1;
+        // スペース出力
+        disp_write(DISP_SCROLL_SPACE_STRING);
+
+        // 出力がなくなったらスクロール位置を0に戻す
+        if (!disp_buffer_length) {
+            scroll_pos = 0;
         }
-        return true;
+
+        // 続きの出力
+        if (disp_buffer_length <= COL_COUNT) {
+            disp_write(disp_char_buf);
+        }
     }
+
+    return need_scroll;
+    /*
+        // 溢れ分があるときのみスクロールする
+        if (disp_buffer_length >= 22) {
+            for (uint8_t row = 0; row < ROW_COUNT; row++) {
+
+                // MSBをworkに格納
+                if ((disp_buffer[row].bytes[0] & 0x80U) != 0) {
+                    // scroll_workへの設定場所でつなぎ目のスペースを調整する。
+                    // 0x80U: 0dot, 0x40U: 1dot, 0x20U: 2dot, 0x10U: 3dot... 最大7dot
+                    disp_buffer[row].scroll_work |= 0x10U;
+                }
+
+                for (uint8_t buf_idx = 0; buf_idx < ROW_BUFFER_LENGTH; buf_idx++) {
+                    // 全体的に1bitシフト
+                    disp_buffer[row].bytes[buf_idx] <<= 1;
+                    if (buf_idx < (ROW_BUFFER_LENGTH - 1)) {
+                        disp_buffer[row].bytes[buf_idx] |= (disp_buffer[row].bytes[buf_idx + 1] & 0x80U) != 0;
+                    }
+                }
+
+                // スクロールバッファ反映
+                if ((disp_buffer[row].scroll_work & 0x80U) != 0) {
+                    uint8_t bits = disp_buffer_length - 1;
+                    uint8_t idx = 0;
+                    while (bits >= 8) {
+                        idx++;
+                        bits -= 8;
+                    }
+                    disp_buffer[row].bytes[idx] |= 0x80U >> bits;
+                }
+                disp_buffer[row].scroll_work <<= 1;
+            }
+            return true;
+        }
+        return false;
+     */
     return false;
 }
 
@@ -591,10 +653,10 @@ static void uart_read_line(void) {
         while (!EUSART1_IsRxReady()) {
             // スクロール間隔判定
             if (TMR0L > DISP_SCROLL_TMR0) {
+                TMR0L = 0;
                 if (rotate_disp_buf()) {
                     put_disp_buffer();
                 }
-                TMR0L = 0;
             }
         }
         c = (char) EUSART1_Read();
@@ -644,10 +706,19 @@ int main(void) {
         LED_SetLow();
         uart_read_line();
         LED_SetHigh();
+
+        for (uint8_t i = 0; i < (UART_BUFFER_SIZE - 1); i++) {
+            disp_char_buf[i] = uart_buf[i];
+        }
+
         uart_write(uart_buf);
         uart_write("\r\n");
 
-        disp_write(uart_buf);
+        need_scroll = false;
+        scroll_pos = 0;
+
+        disp_buffer_clear();
+        disp_write(disp_char_buf);
         put_disp_buffer();
 
     }
