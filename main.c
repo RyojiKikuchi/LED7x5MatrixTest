@@ -612,7 +612,7 @@ static void disp_init(void) {
  */
 static void uart_read_line(void) {
     uint8_t idx = 0;
-    bool rcv = false;
+    bool rcv = false;  // 取りこぼし防止のため、受信後次のスクロールをキャンセルする
     char c;
     TMR0L = 0;
     while (1) {
