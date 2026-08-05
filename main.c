@@ -57,7 +57,7 @@
 
 #define HT16K33_DIMMING 0xE0U
 
-#define I2C_TIME_OUT_TMR0 15U   // 4.1*15 ≒ 60ms
+#define I2C_TIME_OUT_TMR0 15U   // 4.1 * I2C_TIME_OUT_TMR0 (30ms以上あれば安全)
 
 #define UART_BUFFER_SIZE 48U     // シリアル通信の受信バッファサイズ
 
@@ -298,7 +298,7 @@ static void i2c_puts(uint16_t slave_address, uint8_t *send_data, uint8_t length)
         // タイムアウト
         if (TMR0L >= I2C_TIME_OUT_TMR0) {
             i2c_error = true;
-            break;
+            return;
         }
     }
 
@@ -589,8 +589,7 @@ static void uart_read_line(void) {
     TMR0L = 0;
     while (1) {
         while (!EUSART1_IsRxReady()) {
-            // スクロール間隔
-            // 4.1 * 80 = 328ms 
+            // スクロール間隔判定
             if (TMR0L > DISP_SCROLL_TMR0) {
                 if (rotate_disp_buf()) {
                     put_disp_buffer();
