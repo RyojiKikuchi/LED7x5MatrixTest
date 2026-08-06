@@ -69,7 +69,7 @@
 
 #define DISP_SLAVE_ADDRESS 0x70U      // I2C スレーブアドレス
 #define DISP_SCROLL_TMR0 60U    // スクロールスピード(4.1ms * DISP_SCROLL_TMP0)
-#define DISP_SCROLL_SPACE_STRING "  "  // スクロール時の隙間この間隔+1のスペースが空く
+#define DISP_SCROLL_SPACE_STRING "\x82\x82"  // スクロール時の隙間この間隔+1のスペースが空く
 #define ROW_COUNT 5U
 #define COL_COUNT 21U
 
@@ -104,11 +104,10 @@ static bool i2c_error = true; // I2Cエラー有無(初回にi2c_recoveryを呼�
 
 static uint8_t disp_brightness = 0x0FU;
 
-#define DISP_DATA_COUNT 0x61U
 
 // キャラクタデータ
 static const uint8_t disp_data[][3] = {
-    {0x30U, 0x00U, 0x00U}, // 20  
+    {0x20U, 0x00U, 0x00U}, // 20  
     {0x28U, 0x88U, 0x08U}, // 21 !
     {0x6AU, 0xA0U, 0x00U}, // 22 "
     {0x86U, 0xF6U, 0xF6U}, // 23 #
@@ -205,8 +204,11 @@ static const uint8_t disp_data[][3] = {
     {0x85U, 0xA0U, 0x00U}, // 7E ~
     {0x8FU, 0xFFU, 0xFFU}, // 7F 
     {0x40U, 0x83U, 0x43U}, // 80 ℃
-    {0x30U, 0x86U, 0x86U}, // 81 ℃
+    {0x60U, 0x86U, 0x86U}, // 81 ℃
+    {0x30U, 0x00U, 0x00U}, // 82 スクロール時のスペース用文字
 };
+
+#define DISP_DATA_COUNT (uint8_t) ((sizeof(disp_data) / sizeof((disp_data)[0])) -1)
 
 /*
     Main application
@@ -612,7 +614,7 @@ static void disp_init(void) {
  */
 static void uart_read_line(void) {
     uint8_t idx = 0;
-    bool rcv = false;  // 取りこぼし防止のため、受信後次のスクロールをキャンセルする
+    bool rcv = false; // 取りこぼし防止のため、受信後次のスクロールをキャンセルする
     char c;
     TMR0L = 0;
     while (1) {
@@ -685,6 +687,7 @@ int main(void) {
         uart_write(uart_buf);
         uart_write("\r\n");
 
+        // スクロール位置をリセット
         need_scroll = false;
         scroll_pos = 0;
 
