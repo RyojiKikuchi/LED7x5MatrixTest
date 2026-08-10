@@ -141,6 +141,22 @@ void EUSART1_ReceiveDisable(void);
 
 /**
  * @ingroup eusart1
+ * @brief This API enables the EUSART1 receiver interrupt.
+ * @param None.
+ * @return None.
+ */
+void EUSART1_ReceiveInterruptEnable(void);
+
+/**
+ * @ingroup eusart1
+ * @brief This API disables the EUSART1 receiver interrupt.
+ * @param None.
+ * @return None.
+ */
+void EUSART1_ReceiveInterruptDisable(void);
+
+/**
+ * @ingroup eusart1
  * @brief This API enables the EUSART1 to send a break control. 
  * @param None.
  * @return None.
@@ -257,6 +273,30 @@ void EUSART1_FramingErrorCallbackRegister(void (* callbackHandler)(void));
  * @return None.
  */
 void EUSART1_OverrunErrorCallbackRegister(void (* callbackHandler)(void));
+
+/**
+ * @ingroup eusart1
+ * @brief This indicates the function that will be called upon receive interrupt.
+ * @pre Initialize the EUSART1 module with receive interrupt enabled
+ * @param None.
+ * @return None.
+ */
+extern void (*EUSART1_RxInterruptHandler)(void);
+/**
+ * @ingroup eusart1
+ * @brief This API registers the function to be called upon after data has been successfully received.
+ * @param callbackHandler - a function pointer which will be called upon receiver interrupt condition.
+ * @return None.
+ */
+void EUSART1_RxCompleteCallbackRegister(void (* callbackHandler)(void));
+
+/**
+ * @ingroup eusart1
+ * @brief This ISR function is called upon receiver interrupt.
+ * @param void.
+ * @return None.
+ */
+void EUSART1_ReceiveISR(void);
 
 #ifdef __cplusplus  // Provide C++ Compatibility
 

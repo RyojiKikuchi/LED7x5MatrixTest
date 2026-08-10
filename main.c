@@ -614,7 +614,6 @@ static void disp_init(void) {
  */
 static void uart_read_line(void) {
     uint8_t idx = 0;
-    bool rcv = false; // 取りこぼし防止のため、受信後次のスクロールをキャンセルする
     char c;
     TMR0L = 0;
     while (1) {
@@ -622,16 +621,14 @@ static void uart_read_line(void) {
             // スクロール間隔判定
             if (TMR0L > DISP_SCROLL_TMR0) {
                 TMR0L = 0;
-                if (!rcv && need_scroll) {
+                if (need_scroll) {
                     LED_SetHigh();
                     rotate_disp_buf();
                     put_disp_buffer();
                     LED_SetLow();
                 }
-                rcv = false;
             }
         }
-        rcv = true;
         c = (char) EUSART1_Read();
         switch (c) {
             case '\r':
