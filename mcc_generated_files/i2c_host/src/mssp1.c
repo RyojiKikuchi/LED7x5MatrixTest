@@ -91,8 +91,8 @@ void I2C1_Initialize(void)
     SSP1CON2 = 0x0;
     /* DHEN disabled; AHEN disabled; SBCDE disabled; SDAHT 100ns; BOEN disabled; SCIE disabled; PCIE disabled;  */
     SSP1CON3 = 0x0;
-    /* SSPADD 79;  */
-    SSP1ADD = 0x4F;
+    /* SSPADD 19;  */
+    SSP1ADD = 0x13;
     PIE3bits.SSP1IE = 1;
     PIE3bits.BCL1IE = 1;
     SSP1CON1bits.SSPEN = 1;

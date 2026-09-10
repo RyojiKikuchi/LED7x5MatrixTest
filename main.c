@@ -42,6 +42,8 @@
 #include "mcc_generated_files/system/system.h"
 #include <string.h>
 
+#define VERSION "Ver1.10"
+
 #define HT16K33_STANDBY_MODE 0x20U
 #define HT16K33_NORMAL_OPERATION_MODE 0x21U
 
@@ -85,6 +87,7 @@ static char disp_char_buf[UART_BUFFER_SIZE]; // 内部バッファ
 static bool need_scroll = false;
 static uint8_t scroll_pos = 0; // スクロール位置
 static uint8_t skip_count = 0;
+static uint8_t disp_scroll_tmr = DISP_SCROLL_TMR0;
 
 typedef struct {
     uint8_t disp_bits[ROW_COUNT];
@@ -172,31 +175,31 @@ static const uint8_t disp_data[][3] = {
     {0x64U, 0xA0U, 0x00U}, // 5E ^
     {0x80U, 0x00U, 0x0FU}, // 5F _
     {0x48U, 0x40U, 0x00U}, // 60 `
-    {0x8EU, 0x17U, 0x97U}, // 61 a
-    {0x88U, 0x8EU, 0x9EU}, // 62 b
+    {0x6CU, 0x26U, 0xA6U}, // 61 a
+    {0x68U, 0x8CU, 0xACU}, // 62 b
     {0x60U, 0x68U, 0x86U}, // 63 c
-    {0x81U, 0x17U, 0x97U}, // 64 d
-    {0x86U, 0x9FU, 0x86U}, // 65 e
+    {0x62U, 0x26U, 0xA6U}, // 64 d
+    {0x64U, 0xAEU, 0x86U}, // 65 e
     {0x62U, 0x4EU, 0x44U}, // 66 f
-    {0x86U, 0x97U, 0x16U}, // 67 g
+    {0x64U, 0xA6U, 0x2CU}, // 67 g
     {0x68U, 0x8CU, 0xAAU}, // 68 h
     {0x28U, 0x08U, 0x88U}, // 69 i
     {0x44U, 0x04U, 0x48U}, // 6A j
-    {0x80U, 0x9AU, 0xE9U}, // 6B k
+    {0x60U, 0x8AU, 0xCAU}, // 6B k
     {0x48U, 0x88U, 0x8CU}, // 6C l
     {0x80U, 0x5BU, 0xBBU}, // 6D m
-    {0x80U, 0xE9U, 0x99U}, // 6E n
-    {0x80U, 0x69U, 0x96U}, // 6F o
-    {0x86U, 0x9EU, 0x88U}, // 70 p
-    {0x86U, 0x97U, 0x11U}, // 71 q
-    {0x80U, 0xBCU, 0x88U}, // 72 r
-    {0x86U, 0x86U, 0x16U}, // 73 s
+    {0x60U, 0xCAU, 0xAAU}, // 6E n
+    {0x60U, 0x4AU, 0xA4U}, // 6F o
+    {0x64U, 0xACU, 0x88U}, // 70 p
+    {0x64U, 0xA6U, 0x22U}, // 71 q
+    {0x60U, 0xACU, 0x88U}, // 72 r
+    {0x66U, 0x84U, 0x2CU}, // 73 s
     {0x60U, 0x4EU, 0x42U}, // 74 t
-    {0x80U, 0x99U, 0x97U}, // 75 u
-    {0x80U, 0x99U, 0x52U}, // 76 v
+    {0x60U, 0xAAU, 0xA6U}, // 75 u
+    {0x60U, 0xAAU, 0x62U}, // 76 v
     {0x80U, 0xBBU, 0xB6U}, // 77 w
     {0x80U, 0x96U, 0x69U}, // 78 x
-    {0x89U, 0x97U, 0x1EU}, // 79 y
+    {0x6AU, 0xA6U, 0x2CU}, // 79 y
     {0x80U, 0xF2U, 0x4FU}, // 7A z
     {0x62U, 0x4CU, 0x42U}, // 7B {
     {0x28U, 0x88U, 0x88U}, // 7C |
@@ -215,13 +218,21 @@ static const uint8_t disp_data[][3] = {
  */
 
 /*
- * UARTに出力する
+ * UARTに1byte出力する
+ */
+static void uart_put(uint8_t c) {
+    while (!EUSART1_IsTxReady());
+    EUSART1_Write(c);
+}
+
+/*
+ * UARTに文字列を出力する
  */
 static void uart_write(const char *buf) {
     while (*buf != '\0') {
-        while (!EUSART1_IsTxReady());
-        EUSART1_Write(*(buf++));
+        uart_put(*(buf++));
     }
+
 }
 
 /*
@@ -291,7 +302,7 @@ static void i2c_recovery(void) {
 }
 
 /*
- * ディスプレイへ表示データを出力する
+ * I2Cへデータ送信を行う
  */
 static void i2c_puts(uint16_t slave_address, uint8_t *send_data, uint8_t length) {
 
@@ -599,7 +610,7 @@ static void disp_init(void) {
     // オシレータ起動
     disp_put(HT16K33_NORMAL_OPERATION_MODE);
     // Display OFF
-    disp_put(HT16K33_DISPLAY_OFF);
+    //disp_put(HT16K33_DISPLAY_OFF);
     // ROW/INTをROWに設定
     disp_put(HT16K33_ROWINT_ROW);
     // 明るさ設定
@@ -619,7 +630,7 @@ static void uart_read_line(void) {
     while (1) {
         while (!EUSART1_IsRxReady()) {
             // スクロール間隔判定
-            if (TMR0L > DISP_SCROLL_TMR0) {
+            if (TMR0L > disp_scroll_tmr) {
                 TMR0L = 0;
                 if (need_scroll) {
                     LED_SetHigh();
@@ -636,7 +647,11 @@ static void uart_read_line(void) {
                 /*  CR/LF ends the line */
                 if (idx == 0) continue; /* skip leading CR/LF */
                 uart_buf[idx] = '\0';
+                uart_write("\r\n");
                 return;
+            default:
+                uart_put(c);
+                break;
         }
         if (idx < (uint8_t) (UART_BUFFER_SIZE - 1U)) {
             uart_buf[idx++] = c;
@@ -677,12 +692,26 @@ int main(void) {
         uart_read_line();
         LED_SetHigh();
 
+        // オプション解析
+        if (uart_buf[0] == '@') {
+            if (uart_buf[1] == 'V' &&
+                    uart_buf[2] == 'E' &&
+                    uart_buf[3] == 'R') {
+                uart_write(VERSION);
+                uart_write("\r\n");
+                continue;
+
+            } else if (uart_buf[1] == 'S') {
+                if(uart_buf[2] >= '0' && uart_buf[2] <= '9'){
+                    disp_scroll_tmr = (uart_buf[2] - '0') * 10;
+                    continue;
+                }
+            }
+        }
+
         for (uint8_t i = 0; i < UART_BUFFER_SIZE; i++) {
             disp_char_buf[i] = uart_buf[i];
         }
-
-        uart_write(uart_buf);
-        uart_write("\r\n");
 
         // スクロール位置をリセット
         need_scroll = false;
