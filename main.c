@@ -42,7 +42,7 @@
 #include "mcc_generated_files/system/system.h"
 #include <string.h>
 
-#define VERSION "Ver1.10"
+#define VERSION "Ver1.11"
 
 #define HT16K33_STANDBY_MODE 0x20U
 #define HT16K33_NORMAL_OPERATION_MODE 0x21U
@@ -65,6 +65,7 @@
  * UARTバッファサイズの最大値について
  * 内部のカウンタが8bitなので、最大値を超えないように考慮
  * scroll_posが一番大きくなる。
+ * 1文字はスペース含めて最大5ドットのため、
  * 256/5=51.2 余裕を見て48程度を最大値とする。
  */
 #define UART_BUFFER_SIZE 48U     // シリアル通信の受信バッファサイズ
@@ -484,32 +485,30 @@ static void put_disp_buffer(void) {
                     {0x03U, 0x23U, 0x43U, 0x63U, 0x83U, 0xA3U, 0xC3U, 0x16U, 0x36U, 0x56U, 0x76U, 0x96U, 0xB6U, 0xD6U, 0x11U, 0x31U, 0x51U, 0x71U, 0x91U, 0xB1U, 0xD1U}
                 };
              */
-
-            uint8_t upper = (col % 7) * 2 + ((col >= 14) ? 1 : 0);
+            uint8_t upper;
             uint8_t lower;
             if (col < 7) {
-                // 左ブロック（col 0〜6）
+                // 左ブロック (col 0-6)
+                upper = col * 2;
                 lower = 7 - row;
-            } else if (col < 14) {
-                // 真ん中ブロック（col 7〜13）
+            }else if (col < 14) {
+                // 中央ブロック (col 7-13)
+                upper = (col - 7) * 2;
                 if (row < 3) {
                     lower = 2 - row;
                 } else {
                     upper++;
                     lower = 10 - row;
                 }
-
-            } else {
-                // 右ブロック（col 14〜20）
+            }else {
+                // 右ブロック (col14-20))
+                upper = ((col - 14) * 2) + 1;
                 lower = 5 - row;
             }
-
-            uint8_t idx = upper + 1;
-            uint8_t bit_pos = lower;
-
+            
             uint8_t led_on = disp_buffer[row].bytes[buf_idx] & bitmask;
             if (led_on) {
-                disp_raw_buffer[idx] |= 0x80U >> bit_pos;
+                disp_raw_buffer[upper + 1] |= 0x80U >> lower;
             }
             bitmask >>= 1;
             if (bitmask == 0U) {
@@ -653,6 +652,7 @@ static void uart_read_line(void) {
                 uart_put(c);
                 break;
         }
+        // null止めの必要があるので、最後の1byteには格納しない
         if (idx < (uint8_t) (UART_BUFFER_SIZE - 1U)) {
             uart_buf[idx++] = c;
         }
@@ -703,16 +703,18 @@ int main(void) {
 
             } else if (uart_buf[1] == 'S') {
                 if(uart_buf[2] >= '0' && uart_buf[2] <= '9'){
-                    disp_scroll_tmr = (uart_buf[2] - '0') * 10;
+                    disp_scroll_tmr = (uart_buf[2] - '0') * 8;
                     continue;
                 }
             }
         }
 
+        // memcpyよりもforループの方がコード量が小さい・・・
         for (uint8_t i = 0; i < UART_BUFFER_SIZE; i++) {
             disp_char_buf[i] = uart_buf[i];
         }
-
+        //memcpy(disp_char_buf, uart_buf, sizeof(uart_buf));
+        
         // スクロール位置をリセット
         need_scroll = false;
         scroll_pos = 0;
