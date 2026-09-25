@@ -501,7 +501,7 @@ static void put_disp_buffer(void) {
                     lower = 10 - row;
                 }
             }else {
-                // 右ブロック (col14-20))
+                // 右ブロック (col 14-20)
                 upper = ((col - 14) * 2) + 1;
                 lower = 5 - row;
             }
