@@ -42,7 +42,7 @@
 #include "mcc_generated_files/system/system.h"
 #include <string.h>
 
-#define VERSION "Ver1.11"
+#define VERSION "Ver1.12"
 
 #define HT16K33_STANDBY_MODE 0x20U
 #define HT16K33_NORMAL_OPERATION_MODE 0x21U
@@ -60,6 +60,16 @@
 #define HT16K33_DIMMING 0xE0U
 
 #define I2C_TIME_OUT_TMR0 15U   // 4.1 * I2C_TIME_OUT_TMR0 (30ms以上あれば安全)
+
+#define CMD_CALC(a, b, c) \
+                (uint16_t)(((uint16_t)a & 0x1FU) | \
+                          (((uint16_t)b & 0x1FU) << 5) | \
+                          (((uint16_t)c & 0x1FU) << 10)) | \
+                          (0x8000U)
+
+#define CMD_VER     CMD_CALC('V', 'E', 'R')
+#define CMD_SPD     CMD_CALC('S', 'P', 'D')
+#define CMD_BRT     CMD_CALC('B', 'R', 'T')
 
 /*
  * UARTバッファサイズの最大値について
@@ -491,7 +501,7 @@ static void put_disp_buffer(void) {
                 // 左ブロック (col 0-6)
                 upper = col * 2;
                 lower = 7 - row;
-            }else if (col < 14) {
+            } else if (col < 14) {
                 // 中央ブロック (col 7-13)
                 upper = (col - 7) * 2;
                 if (row < 3) {
@@ -500,12 +510,12 @@ static void put_disp_buffer(void) {
                     upper++;
                     lower = 10 - row;
                 }
-            }else {
+            } else {
                 // 右ブロック (col 14-20)
                 upper = ((col - 14) * 2) + 1;
                 lower = 5 - row;
             }
-            
+
             uint8_t led_on = disp_buffer[row].bytes[buf_idx] & bitmask;
             if (led_on) {
                 disp_raw_buffer[upper + 1] |= 0x80U >> lower;
@@ -648,6 +658,12 @@ static void uart_read_line(void) {
                 uart_buf[idx] = '\0';
                 uart_write("\r\n");
                 return;
+            case '\x08':
+                if (idx) {
+                    idx--;
+                }
+                uart_put(c);
+                continue;
             default:
                 uart_put(c);
                 break;
@@ -679,6 +695,8 @@ int main(void) {
     //INTERRUPT_PeripheralInterruptDisable(); 
 
     while (1) {
+
+        // I2Cエラーが発生した場合I2Cバス開放を行う。
         if (i2c_error) {
             for (uint8_t i = 0; i < 4; i++) {
                 LED_Toggle();
@@ -693,20 +711,26 @@ int main(void) {
         LED_SetHigh();
 
         // オプション解析
+        uint16_t cmd = (uart_buf[1] & 0x1F);
+        cmd |= ((uint16_t) (uart_buf[2] & 0x1F) << 5);
+        cmd |= ((uint16_t) (uart_buf[3] & 0x1F) << 10);
         if (uart_buf[0] == '@') {
-            if (uart_buf[1] == 'V' &&
-                    uart_buf[2] == 'E' &&
-                    uart_buf[3] == 'R') {
+            cmd |= 0x8000U;
+        }
+
+        switch (cmd) {
+            case CMD_VER:
                 uart_write(VERSION);
                 uart_write("\r\n");
                 continue;
-
-            } else if (uart_buf[1] == 'S') {
-                if(uart_buf[2] >= '0' && uart_buf[2] <= '9'){
-                    disp_scroll_tmr = (uart_buf[2] - '0') * 8;
+            case CMD_SPD:
+                    disp_scroll_tmr = (uart_buf[4] - '0') * 8;
                     continue;
-                }
-            }
+                continue;
+            case CMD_BRT:
+                disp_brightness = (uart_buf[4] - '0') + 6;
+                i2c_error = true;
+                continue;
         }
 
         // memcpyよりもforループの方がコード量が小さい・・・
@@ -714,7 +738,7 @@ int main(void) {
             disp_char_buf[i] = uart_buf[i];
         }
         //memcpy(disp_char_buf, uart_buf, sizeof(uart_buf));
-        
+
         // スクロール位置をリセット
         need_scroll = false;
         scroll_pos = 0;
