@@ -714,7 +714,7 @@ int main(void) {
         uint16_t cmd = (uart_buf[1] & 0x1F);
         cmd |= ((uint16_t) (uart_buf[2] & 0x1F) << 5);
         cmd |= ((uint16_t) (uart_buf[3] & 0x1F) << 10);
-        if (uart_buf[0]) {
+        if (uart_buf[0] == '@') {
             cmd |= 0x8000U;
         }
 
